@@ -9,8 +9,6 @@ import {
   TFile,
   TFolder,
   normalizePath,
-  type Editor,
-  type EditorPosition,
   type Menu,
   type WorkspaceLeaf,
 } from "obsidian";
@@ -44,32 +42,22 @@ const DOCUMENT_CONTROL_SELECTOR = [
   ".cm-fold-indicator",
 ].join(", ");
 
-type RightDocumentLocation = "right-split" | "right-sidebar";
-
-const RIGHT_DOCUMENT_LOCATION_OPTIONS: Record<RightDocumentLocation, string> = {
-  "right-split": "Right split",
-  "right-sidebar": "Right sidebar",
-};
-
 interface PageModeSettings {
   pageUnitScroll: boolean;
   archiveFolder: string;
   showArchiveFolder: boolean;
-  rightDocumentLocation: RightDocumentLocation;
 }
 
 type LoadedPageModeSettings = {
   pageUnitScroll?: boolean;
   archiveFolder?: unknown;
   showArchiveFolder?: boolean;
-  rightDocumentLocation?: RightDocumentLocation;
 };
 
 const DEFAULT_SETTINGS: PageModeSettings = {
   pageUnitScroll: false,
   archiveFolder: "archive",
   showArchiveFolder: false,
-  rightDocumentLocation: "right-split",
 };
 
 type ContentLineRect = {
@@ -109,29 +97,6 @@ type AppWithInternalPlugins = App & {
   internalPlugins?: InternalPlugins;
 };
 
-type SelectedEditorRange = {
-  from: EditorPosition;
-  to: EditorPosition;
-  text: string;
-};
-
-type DraggedEditorSelection = {
-  editor: Editor;
-  sourceFile: TFile;
-  ranges: SelectedEditorRange[];
-};
-
-type MarkdownViewTarget = {
-  file: TFile;
-  displayName: string;
-  distance: number;
-};
-
-type MarkdownLeafTarget = {
-  leaf: WorkspaceLeaf;
-  detachOnFailure: boolean;
-};
-
 type PendingWheelNavigation = {
   leaf: WorkspaceLeaf;
   offset: -1 | 1;
@@ -145,9 +110,6 @@ export default class PageModePlugin extends Plugin {
   private openingFileNavigationOffset: -1 | 1 | null = null;
   private pendingWheelNavigation: PendingWheelNavigation | null = null;
   private unloaded = false;
-  private draggedEditorSelection: DraggedEditorSelection | null = null;
-  private markdownActionViews = new WeakSet<MarkdownView>();
-  private markdownActionEls = new Set<HTMLElement>();
   private archiveFolderStyleEl: HTMLStyleElement | null = null;
   private filePositionStyleEl: HTMLStyleElement | null = null;
   private filePositionBarEls = new WeakMap<MarkdownView, HTMLDivElement>();
@@ -177,22 +139,6 @@ export default class PageModePlugin extends Plugin {
       name: "Open previous Markdown file",
       callback: () => {
         void this.openPreviousMarkdownFile(true);
-      },
-    });
-
-    this.addCommand({
-      id: "send-selection-or-file-to-nearest-right-document",
-      name: "Send selection or file to nearest right document",
-      editorCheckCallback: (checking, editor, info) => {
-        if (!this.canSendToRightDocument(info.file)) {
-          return false;
-        }
-
-        if (!checking) {
-          void this.extractSelectionToRightDocumentCommand(editor, info.file);
-        }
-
-        return true;
       },
     });
 
@@ -252,32 +198,12 @@ export default class PageModePlugin extends Plugin {
       this.setActiveFilePositionBar(null);
     });
 
-    this.registerDomEvent(
-      activeDocument,
-      "dragstart",
-      (event: DragEvent) => {
-        this.handleDragStart(event);
-      },
-      { capture: true },
-    );
-
-    this.registerDomEvent(
-      activeDocument,
-      "dragend",
-      () => {
-        this.draggedEditorSelection = null;
-      },
-      { capture: true },
-    );
-
     this.register(() => {
       this.unloaded = true;
       if (this.filePositionUpdateFrame !== null) {
         activeWindow.cancelAnimationFrame(this.filePositionUpdateFrame);
         this.filePositionUpdateFrame = null;
       }
-      this.markdownActionEls.forEach((element) => element.remove());
-      this.markdownActionEls.clear();
       this.archiveFolderStyleEl?.remove();
       this.archiveFolderStyleEl = null;
       this.filePositionStyleEl?.remove();
@@ -306,33 +232,17 @@ export default class PageModePlugin extends Plugin {
       }),
     );
 
-    this.registerEvent(
-      this.app.workspace.on("editor-menu", (menu, editor, info) => {
-        this.addSendToRightDocumentMenuItem(menu, editor, info.file);
-      }),
-    );
-
-    this.registerEvent(
-      this.app.workspace.on("editor-drop", (event, editor, info) => {
-        if (event.defaultPrevented) {
-          return;
-        }
-
-        this.handleEditorDrop(event, editor, info.file);
-      }),
-    );
-
     this.app.workspace.onLayoutReady(() => {
       if (this.unloaded) {
         return;
       }
 
-      this.addMarkdownViewActions();
+      this.addFilePositionBars();
     });
 
     this.registerEvent(
       this.app.workspace.on("layout-change", () => {
-        this.addMarkdownViewActions();
+        this.addFilePositionBars();
       }),
     );
 
@@ -344,7 +254,7 @@ export default class PageModePlugin extends Plugin {
 
     this.registerEvent(
       this.app.workspace.on("file-open", () => {
-        this.addMarkdownViewActions();
+        this.addFilePositionBars();
       }),
     );
   }
@@ -361,10 +271,6 @@ export default class PageModePlugin extends Plugin {
     return typeof value === "object" && value !== null;
   }
 
-  private isRightDocumentLocation(value: unknown): value is RightDocumentLocation {
-    return value === "right-split" || value === "right-sidebar";
-  }
-
   private parseLoadedSettings(value: unknown): LoadedPageModeSettings {
     if (!this.isRecord(value)) {
       return {};
@@ -375,9 +281,6 @@ export default class PageModePlugin extends Plugin {
       archiveFolder: value.archiveFolder,
       showArchiveFolder:
         typeof value.showArchiveFolder === "boolean" ? value.showArchiveFolder : undefined,
-      rightDocumentLocation: this.isRightDocumentLocation(value.rightDocumentLocation)
-        ? value.rightDocumentLocation
-        : undefined,
     };
   }
 
@@ -388,15 +291,11 @@ export default class PageModePlugin extends Plugin {
       pageUnitScroll: loadedData.pageUnitScroll ?? DEFAULT_SETTINGS.pageUnitScroll,
       archiveFolder: this.normalizeArchiveFolder(loadedData.archiveFolder),
       showArchiveFolder: loadedData.showArchiveFolder ?? DEFAULT_SETTINGS.showArchiveFolder,
-      rightDocumentLocation: loadedData.rightDocumentLocation ?? DEFAULT_SETTINGS.rightDocumentLocation,
     };
   }
 
   async saveSettings(): Promise<void> {
     this.settings.archiveFolder = this.normalizeArchiveFolder(this.settings.archiveFolder);
-    this.settings.rightDocumentLocation = this.isRightDocumentLocation(this.settings.rightDocumentLocation)
-      ? this.settings.rightDocumentLocation
-      : DEFAULT_SETTINGS.rightDocumentLocation;
     await this.saveData(this.settings);
     this.updateArchiveFolderStyles();
   }
@@ -457,83 +356,7 @@ export default class PageModePlugin extends Plugin {
     return JSON.stringify(value);
   }
 
-  private handleDragStart(event: DragEvent): void {
-    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-    const target = event.targetNode;
-    if (!view?.file || view.getMode() !== "source" || !target || !view.containerEl.contains(target)) {
-      this.draggedEditorSelection = null;
-      return;
-    }
-
-    const ranges = this.getSelectedEditorRanges(view.editor);
-    if (ranges.length === 0) {
-      this.draggedEditorSelection = null;
-      return;
-    }
-
-    this.draggedEditorSelection = {
-      editor: view.editor,
-      sourceFile: view.file,
-      ranges,
-    };
-  }
-
-  private handleEditorDrop(event: DragEvent, targetEditor: Editor, targetFile: TFile | null): void {
-    const draggedSelection = this.draggedEditorSelection;
-    this.draggedEditorSelection = null;
-
-    if (
-      !draggedSelection ||
-      event.ctrlKey ||
-      event.metaKey ||
-      !targetFile ||
-      !PageModePlugin.isMarkdownFile(targetFile) ||
-      targetFile.path === draggedSelection.sourceFile.path ||
-      targetEditor === draggedSelection.editor
-    ) {
-      return;
-    }
-
-    const targetValueBeforeDrop = targetEditor.getValue();
-
-    window.setTimeout(() => {
-      if (targetEditor.getValue() === targetValueBeforeDrop) {
-        return;
-      }
-
-      if (!this.areEditorRangesUnchanged(draggedSelection.editor, draggedSelection.ranges)) {
-        return;
-      }
-
-      this.deleteEditorRanges(draggedSelection.editor, draggedSelection.ranges);
-    }, 0);
-  }
-
-  private addSendToRightDocumentMenuItem(menu: Menu, editor: Editor, sourceFile: TFile | null): void {
-    const sourceView = this.app.workspace.getActiveViewOfType(MarkdownView);
-    if (!(sourceView instanceof MarkdownView) || sourceView.getMode() !== "source" || !sourceFile) {
-      return;
-    }
-
-    const ranges = this.getSelectedEditorRanges(editor);
-    if (!PageModePlugin.isMarkdownFile(sourceFile)) {
-      return;
-    }
-
-    const title =
-      ranges.length > 0
-        ? "Send selection to right document"
-        : "Send current file to right document";
-
-    menu.addSeparator();
-    menu.addItem((item) => {
-      item.setTitle(title).setIcon("panel-left-open").onClick(() => {
-        void this.extractSelectionToRightDocument(editor, sourceFile, sourceView);
-      });
-    });
-  }
-
-  private addMarkdownViewActions(): void {
+  private addFilePositionBars(): void {
     if (this.unloaded) {
       return;
     }
@@ -547,15 +370,6 @@ export default class PageModePlugin extends Plugin {
       }
 
       this.addFilePositionBarToMarkdownView(view, navigationFiles);
-
-      if (!this.markdownActionViews.has(view)) {
-        const actionEl = view.addAction("panel-left-open", "Send selection or file to right document", () => {
-          void this.extractSelectionToRightDocumentFromView(view);
-        });
-        actionEl.setAttr("data-pagemode-markdown-action", "");
-        this.markdownActionEls.add(actionEl);
-        this.markdownActionViews.add(view);
-      }
     });
   }
 
@@ -796,391 +610,6 @@ export default class PageModePlugin extends Plugin {
   display: none;
 }
 `;
-  }
-
-  private canSendToRightDocument(sourceFile: TFile | null): sourceFile is TFile {
-    const sourceView = this.app.workspace.getActiveViewOfType(MarkdownView);
-    return (
-      sourceView instanceof MarkdownView &&
-      sourceView.getMode() === "source" &&
-      sourceFile !== null &&
-      PageModePlugin.isMarkdownFile(sourceFile)
-    );
-  }
-
-  private async extractSelectionToRightDocumentCommand(editor: Editor, sourceFile: TFile | null): Promise<void> {
-    const sourceView = this.app.workspace.getActiveViewOfType(MarkdownView);
-    if (!(sourceView instanceof MarkdownView) || sourceView.getMode() !== "source") {
-      new Notice("Switch to editing view to extract selected text.");
-      return;
-    }
-
-    if (!sourceFile || !PageModePlugin.isMarkdownFile(sourceFile)) {
-      new Notice("No active Markdown file.");
-      return;
-    }
-
-    await this.extractSelectionToRightDocument(editor, sourceFile, sourceView);
-  }
-
-  private async extractSelectionToRightDocumentFromView(sourceView: MarkdownView): Promise<void> {
-    if (sourceView.getMode() !== "source") {
-      new Notice("Switch to editing view to extract selected text.");
-      return;
-    }
-
-    if (!sourceView.file || !PageModePlugin.isMarkdownFile(sourceView.file)) {
-      new Notice("No active Markdown file.");
-      return;
-    }
-
-    await this.extractSelectionToRightDocument(sourceView.editor, sourceView.file, sourceView);
-  }
-
-  private async extractSelectionToRightDocument(
-    editor: Editor,
-    sourceFile: TFile,
-    sourceView: MarkdownView,
-  ): Promise<void> {
-    const ranges = this.getSelectedEditorRanges(editor);
-    const targetFile = await this.getOrCreateRightMarkdownTarget(sourceView, sourceFile);
-    if (!targetFile) {
-      new Notice("No Markdown document available on the right.");
-      return;
-    }
-
-    if (ranges.length === 0) {
-      await this.moveWholeFileToRightDocument(sourceView.leaf, sourceFile, editor.getValue(), targetFile);
-      return;
-    }
-
-    await this.extractSelectionToMarkdownFile(editor, ranges, targetFile);
-  }
-
-  private async getOrCreateRightMarkdownTarget(
-    sourceView: MarkdownView,
-    sourceFile: TFile,
-  ): Promise<TFile | null> {
-    const existingTarget = this.getNearestRightMarkdownTarget(sourceView, sourceFile);
-    if (existingTarget) {
-      return existingTarget.file;
-    }
-
-    let file: TFile | null = null;
-    let target: MarkdownLeafTarget | null = null;
-    try {
-      target = this.getOrCreateRightMarkdownLeafTarget(sourceView);
-      file = await this.createRootMarkdownFile();
-      await target.leaf.openFile(file, { active: false });
-      return file;
-    } catch (error) {
-      if (target?.detachOnFailure) {
-        target.leaf.detach();
-      }
-      if (file) {
-        try {
-          await this.app.fileManager.trashFile(file);
-        } catch (cleanupError) {
-          console.error("Failed to clean up right Markdown document", cleanupError);
-        }
-      }
-      console.error("Failed to create right Markdown document", error);
-      new Notice("Failed to create a right document.");
-      return null;
-    }
-  }
-
-  private getOrCreateRightMarkdownLeafTarget(sourceView: MarkdownView): MarkdownLeafTarget {
-    const emptyTarget = this.getNearestRightEmptyMarkdownLeafTarget(sourceView);
-    if (emptyTarget) {
-      return emptyTarget;
-    }
-
-    if (this.settings.rightDocumentLocation === "right-sidebar") {
-      return this.getOrCreateRightSidebarMarkdownLeafTarget();
-    }
-
-    return {
-      leaf: this.app.workspace.createLeafBySplit(sourceView.leaf, "vertical", false),
-      detachOnFailure: true,
-    };
-  }
-
-  private getOrCreateRightSidebarMarkdownLeafTarget(): MarkdownLeafTarget {
-    const existingLeaf = this.app.workspace.getRightLeaf(false);
-    if (existingLeaf?.view.getViewType() === "empty") {
-      return {
-        leaf: existingLeaf,
-        detachOnFailure: false,
-      };
-    }
-
-    const leaf = this.app.workspace.getRightLeaf(true) ?? existingLeaf;
-    if (!leaf) {
-      throw new Error("No right sidebar leaf available.");
-    }
-
-    return {
-      leaf,
-      detachOnFailure: leaf !== existingLeaf,
-    };
-  }
-
-  private getNearestRightEmptyMarkdownLeafTarget(sourceView: MarkdownView): MarkdownLeafTarget | null {
-    const sourceRect = this.getVisibleViewRect(sourceView);
-    if (!sourceRect) {
-      return null;
-    }
-
-    const sourceCenterX = this.getRectCenterX(sourceRect);
-    const candidates: Array<{ leaf: WorkspaceLeaf; distance: number }> = [];
-    this.app.workspace.iterateAllLeaves((leaf) => {
-      if (leaf === sourceView.leaf || leaf.view.getViewType() !== "empty") {
-        return;
-      }
-
-      const containerEl = leaf.view.containerEl;
-      if (!this.isMainWorkspaceTarget(containerEl)) {
-        return;
-      }
-
-      const targetRect = containerEl.getBoundingClientRect();
-      if (targetRect.width === 0 || targetRect.height === 0 || this.getRectCenterX(targetRect) <= sourceCenterX + LINE_BOUNDARY_EPSILON_PX) {
-        return;
-      }
-
-      const horizontalGap = Math.max(0, targetRect.left - sourceRect.right);
-      const verticalGap = this.getVerticalGap(sourceRect, targetRect);
-      candidates.push({
-        leaf,
-        distance: horizontalGap * horizontalGap + verticalGap * verticalGap,
-      });
-    });
-
-    const target = candidates.sort((a, b) => a.distance - b.distance)[0];
-    return target ? { leaf: target.leaf, detachOnFailure: false } : null;
-  }
-
-  private async createRootMarkdownFile(): Promise<TFile> {
-    const root = this.app.vault.getRoot();
-    const path = this.getAvailableFilePath(root, "Untitled.md");
-    return this.app.vault.create(path, "");
-  }
-
-  private async moveWholeFileToRightDocument(
-    sourceLeaf: WorkspaceLeaf,
-    sourceFile: TFile,
-    sourceContent: string,
-    targetFile: TFile,
-  ): Promise<void> {
-    try {
-      await this.appendTextToFile(targetFile, this.getWholeFileExtractedText(sourceFile, sourceContent));
-    } catch (error) {
-      console.error("Failed to append whole file to right document", error);
-      new Notice("Failed to copy file content to right document.");
-      return;
-    }
-
-    await this.clearAndFocusSourceLeaf(sourceLeaf);
-
-    try {
-      await this.app.fileManager.trashFile(sourceFile);
-    } catch (error) {
-      console.error("Failed to trash source file after copying to right document", error);
-      new Notice("Copied to right document, but failed to delete the source file.");
-      this.focusWorkspaceLeaf(sourceLeaf);
-      return;
-    }
-
-    this.focusWorkspaceLeaf(sourceLeaf);
-    new Notice(`Moved ${sourceFile.basename} to ${targetFile.basename}.`);
-  }
-
-  private async clearAndFocusSourceLeaf(sourceLeaf: WorkspaceLeaf): Promise<void> {
-    try {
-      await sourceLeaf.setViewState({ type: "empty", active: true });
-    } catch (error) {
-      console.error("Failed to clear source tab after moving file", error);
-    }
-
-    this.focusWorkspaceLeaf(sourceLeaf);
-  }
-
-  private focusWorkspaceLeaf(leaf: WorkspaceLeaf): void {
-    this.app.workspace.setActiveLeaf(leaf, { focus: true });
-    activeWindow.requestAnimationFrame(() => {
-      if (!this.unloaded) {
-        this.app.workspace.setActiveLeaf(leaf, { focus: true });
-      }
-    });
-  }
-
-  private getWholeFileExtractedText(file: TFile, content: string): string {
-    const body = this.trimBoundaryNewlines(content);
-    if (!body) {
-      return `# ${file.basename}`;
-    }
-
-    return `# ${file.basename}\n\n${body}`;
-  }
-
-  private async extractSelectionToMarkdownFile(editor: Editor, ranges: SelectedEditorRange[], targetFile: TFile): Promise<void> {
-    if (!this.areEditorRangesUnchanged(editor, ranges)) {
-      new Notice("Selection changed before extraction.");
-      return;
-    }
-
-    const extractedText = this.getExtractedText(ranges);
-    if (!extractedText) {
-      new Notice("No selected text to extract.");
-      return;
-    }
-
-    try {
-      await this.appendTextToFile(targetFile, extractedText);
-      this.deleteEditorRanges(editor, ranges);
-      new Notice(`Extracted to ${targetFile.basename}.`);
-    } catch (error) {
-      console.error("Failed to extract selection", error);
-      new Notice("Failed to extract selection.");
-    }
-  }
-
-  private getNearestRightMarkdownTarget(sourceView: MarkdownView, sourceFile: TFile): MarkdownViewTarget | null {
-    const sourceRect = this.getVisibleViewRect(sourceView);
-    if (!sourceRect) {
-      return null;
-    }
-
-    const sourceCenterX = this.getRectCenterX(sourceRect);
-    const targets: MarkdownViewTarget[] = [];
-
-    this.app.workspace.iterateAllLeaves((leaf) => {
-      const view = leaf.view;
-      if (
-        !(view instanceof MarkdownView) ||
-        view === sourceView ||
-        !view.file ||
-        !PageModePlugin.isMarkdownFile(view.file) ||
-        view.file.path === sourceFile.path
-      ) {
-        return;
-      }
-
-      const targetRect = this.getVisibleViewRect(view);
-      if (!targetRect || this.getRectCenterX(targetRect) <= sourceCenterX + LINE_BOUNDARY_EPSILON_PX) {
-        return;
-      }
-
-      const horizontalGap = Math.max(0, targetRect.left - sourceRect.right);
-      const verticalGap = this.getVerticalGap(sourceRect, targetRect);
-      targets.push({
-        file: view.file,
-        displayName: view.file.basename,
-        distance: horizontalGap * horizontalGap + verticalGap * verticalGap,
-      });
-    });
-
-    return targets.sort((a, b) => a.distance - b.distance || this.collator.compare(a.displayName, b.displayName))[0] ?? null;
-  }
-
-  private getVisibleViewRect(view: MarkdownView): DOMRect | null {
-    const rect = view.containerEl.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) {
-      return null;
-    }
-
-    return rect;
-  }
-
-  private getRectCenterX(rect: DOMRect): number {
-    return rect.left + rect.width / 2;
-  }
-
-  private getVerticalGap(a: DOMRect, b: DOMRect): number {
-    if (b.bottom < a.top) {
-      return a.top - b.bottom;
-    }
-
-    if (b.top > a.bottom) {
-      return b.top - a.bottom;
-    }
-
-    return 0;
-  }
-
-  private getSelectedEditorRanges(editor: Editor): SelectedEditorRange[] {
-    return editor
-      .listSelections()
-      .map((selection) => this.normalizeSelectedEditorRange(editor, selection.anchor, selection.head))
-      .filter((range): range is SelectedEditorRange => range !== null)
-      .sort((a, b) => this.compareEditorPositions(a.from, b.from));
-  }
-
-  private normalizeSelectedEditorRange(
-    editor: Editor,
-    anchor: EditorPosition,
-    head: EditorPosition,
-  ): SelectedEditorRange | null {
-    if (this.compareEditorPositions(anchor, head) === 0) {
-      return null;
-    }
-
-    const from = this.compareEditorPositions(anchor, head) < 0 ? anchor : head;
-    const to = from === anchor ? head : anchor;
-    const text = editor.getRange(from, to);
-
-    if (text.length === 0) {
-      return null;
-    }
-
-    return { from, to, text };
-  }
-
-  private compareEditorPositions(a: EditorPosition, b: EditorPosition): number {
-    return a.line - b.line || a.ch - b.ch;
-  }
-
-  private areEditorRangesUnchanged(editor: Editor, ranges: SelectedEditorRange[]): boolean {
-    return ranges.every((range) => editor.getRange(range.from, range.to) === range.text);
-  }
-
-  private deleteEditorRanges(editor: Editor, ranges: SelectedEditorRange[]): void {
-    const changes = [...ranges]
-      .sort((a, b) => this.compareEditorPositions(b.from, a.from))
-      .map((range) => ({
-        from: range.from,
-        to: range.to,
-        text: "",
-      }));
-
-    editor.transaction({ changes }, "pagemode-extract-selection");
-  }
-
-  private getExtractedText(ranges: SelectedEditorRange[]): string {
-    return ranges.map((range) => this.trimBoundaryNewlines(range.text)).filter(Boolean).join("\n\n");
-  }
-
-  private trimBoundaryNewlines(text: string): string {
-    return text.replace(/^\n+|\n+$/g, "");
-  }
-
-  private async appendTextToFile(file: TFile, text: string): Promise<void> {
-    await this.app.vault.process(file, (content) => {
-      if (content.length === 0) {
-        return text;
-      }
-
-      if (content.endsWith("\n\n")) {
-        return `${content}${text}`;
-      }
-
-      if (content.endsWith("\n")) {
-        return `${content}\n${text}`;
-      }
-
-      return `${content}\n\n${text}`;
-    });
   }
 
   private async handleWheel(event: WheelEvent): Promise<void> {
@@ -2064,23 +1493,6 @@ class PageModeSettingTab extends PluginSettingTab {
           this.plugin.settings.pageUnitScroll = value;
           await this.plugin.saveSettings();
         });
-      });
-
-    new Setting(containerEl)
-      .setName("New right document location")
-      .setDesc("When no Markdown document is available on the right, create the target here. Existing right documents and empty tabs are reused first.")
-      .addDropdown((dropdown) => {
-        dropdown
-          .addOptions(RIGHT_DOCUMENT_LOCATION_OPTIONS)
-          .setValue(this.plugin.settings.rightDocumentLocation)
-          .onChange(async (value) => {
-            if (value !== "right-split" && value !== "right-sidebar") {
-              return;
-            }
-
-            this.plugin.settings.rightDocumentLocation = value;
-            await this.plugin.saveSettings();
-          });
       });
 
     new Setting(containerEl)

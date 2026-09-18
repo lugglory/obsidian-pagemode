@@ -1,9 +1,8 @@
 # PageMode
 
-Scroll through files and gather contents quickly.
+Scroll through Markdown files and organize notes quickly.
 
 - Step through Markdown notes by wheeling on the left-side file position bar.
-- Send selected text, or the whole current note, to a Markdown tab on the right.
 - Archive and unarchive files or folders while preserving their relative path.
 
 ## Commands
@@ -12,7 +11,6 @@ Scroll through files and gather contents quickly.
 - **Open previous Markdown file**
 - **Archive current file**
 - **Unarchive current file**
-- **Send selection or file to nearest right document**
 
 ## Settings
 
