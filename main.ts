@@ -10,6 +10,7 @@ import {
   TFolder,
   normalizePath,
   type Menu,
+  type SettingDefinitionRender,
   type WorkspaceLeaf,
 } from "obsidian";
 
@@ -201,7 +202,7 @@ export default class PageModePlugin extends Plugin {
     this.register(() => {
       this.unloaded = true;
       if (this.filePositionUpdateFrame !== null) {
-        activeWindow.cancelAnimationFrame(this.filePositionUpdateFrame);
+        window.cancelAnimationFrame(this.filePositionUpdateFrame);
         this.filePositionUpdateFrame = null;
       }
       this.archiveFolderStyleEl?.remove();
@@ -334,9 +335,9 @@ export default class PageModePlugin extends Plugin {
 
   private updateArchiveFolderStyles(): void {
     if (!this.archiveFolderStyleEl) {
-      this.archiveFolderStyleEl = activeDocument.createElement("style");
-      this.archiveFolderStyleEl.setAttr("data-pagemode-archive-folder", "");
-      activeDocument.head.appendChild(this.archiveFolderStyleEl);
+      this.archiveFolderStyleEl = activeDocument.head.createEl("style", {
+        attr: { "data-pagemode-archive-folder": "" },
+      });
     }
 
     if (this.settings.showArchiveFolder) {
@@ -378,7 +379,7 @@ export default class PageModePlugin extends Plugin {
       return;
     }
 
-    this.filePositionUpdateFrame = activeWindow.requestAnimationFrame(() => {
+    this.filePositionUpdateFrame = window.requestAnimationFrame(() => {
       this.filePositionUpdateFrame = null;
       this.updateFilePositionBars();
     });
@@ -405,15 +406,11 @@ export default class PageModePlugin extends Plugin {
     let barEl = this.filePositionBarEls.get(view);
     let thumbEl = barEl?.querySelector<HTMLElement>(`.${FILE_POSITION_THUMB_CLASS}`) ?? null;
     if (!barEl || !thumbEl || !view.contentEl.contains(barEl)) {
-      barEl = activeDocument.createElement("div");
-      barEl.addClass(FILE_POSITION_BAR_CLASS);
-      barEl.setAttr("data-pagemode-file-position-bar", "");
-
-      thumbEl = activeDocument.createElement("div");
-      thumbEl.addClass(FILE_POSITION_THUMB_CLASS);
-      barEl.appendChild(thumbEl);
-
-      view.contentEl.appendChild(barEl);
+      barEl = view.contentEl.createDiv({
+        cls: FILE_POSITION_BAR_CLASS,
+        attr: { "data-pagemode-file-position-bar": "" },
+      });
+      thumbEl = barEl.createDiv({ cls: FILE_POSITION_THUMB_CLASS });
       this.filePositionBarEls.set(view, barEl);
     }
 
@@ -568,9 +565,9 @@ export default class PageModePlugin extends Plugin {
 
   private ensureFilePositionStyles(): void {
     if (!this.filePositionStyleEl) {
-      this.filePositionStyleEl = activeDocument.createElement("style");
-      this.filePositionStyleEl.setAttr("data-pagemode-file-position-styles", "");
-      activeDocument.head.appendChild(this.filePositionStyleEl);
+      this.filePositionStyleEl = activeDocument.head.createEl("style", {
+        attr: { "data-pagemode-file-position-styles": "" },
+      });
     }
 
     this.filePositionStyleEl.textContent = `
@@ -923,11 +920,7 @@ export default class PageModePlugin extends Plugin {
     const lineRects: ContentLineRect[] = [];
     const range = scrollEl.doc.createRange();
 
-    try {
-      this.collectContentLineRects(scrollEl, contentEl, searchBand, scrollRect, range, lineRects);
-    } finally {
-      range.detach();
-    }
+    this.collectContentLineRects(scrollEl, contentEl, searchBand, scrollRect, range, lineRects);
 
     return this.mergeLineRects(lineRects);
   }
@@ -1170,9 +1163,13 @@ export default class PageModePlugin extends Plugin {
     try {
       const result = this.getFileExplorerPluginInstance()?.revealInFolder?.(file);
       if (this.isPromiseLike(result)) {
-        void Promise.resolve(result).finally(() => {
-          this.scheduleFileExplorerSelectionSync(file);
-        });
+        void Promise.resolve(result)
+          .catch((error: unknown) => {
+            console.debug("Failed to reveal file in file explorer", error);
+          })
+          .then(() => {
+            this.scheduleFileExplorerSelectionSync(file);
+          });
       }
     } catch (error) {
       console.debug("Failed to reveal file in file explorer", error);
@@ -1201,8 +1198,8 @@ export default class PageModePlugin extends Plugin {
       }
     };
 
-    activeWindow.setTimeout(syncIfStillActive, 0);
-    activeWindow.requestAnimationFrame(syncIfStillActive);
+    window.setTimeout(syncIfStillActive, 0);
+    window.requestAnimationFrame(syncIfStillActive);
   }
 
   private syncFileExplorerSelection(file: TFile): boolean {
@@ -1481,41 +1478,60 @@ class PageModeSettingTab extends PluginSettingTab {
     super(app, plugin);
   }
 
+  getSettingDefinitions() {
+    return [
+      {
+        name: "Page-unit scrolling",
+        desc: "Use wheel and trackpad gestures for page-sized content scrolling and edge-to-edge file movement.",
+        render: (setting: Setting) => {
+          setting.addToggle((toggle) => {
+            toggle.setValue(this.plugin.settings.pageUnitScroll).onChange(async (value) => {
+              this.plugin.settings.pageUnitScroll = value;
+              await this.plugin.saveSettings();
+            });
+          });
+        },
+      },
+      {
+        name: "Archive folder",
+        desc: "Files are moved under this folder while keeping their current relative path.",
+        render: (setting: Setting) => {
+          setting.addText((text) => {
+            text
+              .setPlaceholder(DEFAULT_SETTINGS.archiveFolder)
+              .setValue(this.plugin.settings.archiveFolder)
+              .onChange(async (value) => {
+                this.plugin.settings.archiveFolder = value.trim();
+                await this.plugin.saveSettings();
+              });
+          });
+        },
+      },
+      {
+        name: "Show archive folder",
+        desc: "Show the archive folder in File explorer. Archived files are still excluded from PageMode navigation.",
+        render: (setting: Setting) => {
+          setting.addToggle((toggle) => {
+            toggle.setValue(this.plugin.settings.showArchiveFolder).onChange(async (value) => {
+              this.plugin.settings.showArchiveFolder = value;
+              await this.plugin.saveSettings();
+            });
+          });
+        },
+      },
+    ] satisfies SettingDefinitionRender[];
+  }
+
+  // Obsidian versions before 1.13.0 use the same definitions through this fallback.
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
 
-    new Setting(containerEl)
-      .setName("Page-unit scrolling")
-      .setDesc("Use wheel and trackpad gestures for page-sized content scrolling and edge-to-edge file movement.")
-      .addToggle((toggle) => {
-        toggle.setValue(this.plugin.settings.pageUnitScroll).onChange(async (value) => {
-          this.plugin.settings.pageUnitScroll = value;
-          await this.plugin.saveSettings();
-        });
-      });
-
-    new Setting(containerEl)
-      .setName("Archive folder")
-      .setDesc("Files are moved under this folder while keeping their current relative path.")
-      .addText((text) => {
-        text
-          .setPlaceholder(DEFAULT_SETTINGS.archiveFolder)
-          .setValue(this.plugin.settings.archiveFolder)
-          .onChange(async (value) => {
-            this.plugin.settings.archiveFolder = value.trim();
-            await this.plugin.saveSettings();
-          });
-      });
-
-    new Setting(containerEl)
-      .setName("Show archive folder")
-      .setDesc("Show the archive folder in File explorer. Archived files are still excluded from PageMode navigation.")
-      .addToggle((toggle) => {
-        toggle.setValue(this.plugin.settings.showArchiveFolder).onChange(async (value) => {
-          this.plugin.settings.showArchiveFolder = value;
-          await this.plugin.saveSettings();
-        });
-      });
+    for (const definition of this.getSettingDefinitions()) {
+      const setting = new Setting(containerEl)
+        .setName(definition.name)
+        .setDesc(definition.desc);
+      definition.render(setting);
+    }
   }
 }

@@ -1,13 +1,11 @@
 # Review Notes
 
-This document records intentional decisions around Obsidian plugin review warnings that are currently left unresolved.
+## Settings API compatibility
 
-## `PluginSettingTab.display()` Deprecation
+PageMode implements `getSettingDefinitions()` so that Obsidian 1.13.0 and newer can render and search its settings.
 
-Obsidian marks `PluginSettingTab.display()` as deprecated since Obsidian `1.13.0` and recommends `getSettingDefinitions()`.
+The `display()` override remains as a fallback for older versions, preserving the minimum supported Obsidian version of 1.6.6. Both paths share the same definitions and rendering callbacks, including saving, archive-path normalization, and archive-folder visibility updates.
 
-PageMode intentionally keeps `display()` for now.
+The new settings types are imported only for type checking; no new runtime API is required by the fallback.
 
-Using `getSettingDefinitions()` would require raising `minAppVersion` to `1.13.0`. PageMode currently supports Obsidian `1.6.6` and newer. Keeping `display()` preserves compatibility with older supported Obsidian versions.
-
-This recommendation is accepted until PageMode is ready to require Obsidian `1.13.0` or newer.
+See the official [dual-support migration guide](https://docs.obsidian.md/plugins/guides/migrate-declarative-settings).
