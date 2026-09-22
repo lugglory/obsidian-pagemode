@@ -1,7 +1,7 @@
 {
   "name": "pagemode",
   "version": "0.1.30",
-  "description": "Page-style reading, wheel navigation, and note filing",
+  "description": "Page-style scrolling and wheel navigation between Markdown notes, with path-preserving archiving",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
