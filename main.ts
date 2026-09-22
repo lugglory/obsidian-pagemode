@@ -27,8 +27,7 @@ const FILE_POSITION_BAR_MIN_WIDTH_PX = 12;
 const FILE_POSITION_BAR_MAX_WIDTH_PX = 64;
 const FILE_POSITION_BAR_MARGIN_GAP_PX = 4;
 const FILE_POSITION_BAR_ACTIVE_CLASS = "is-active";
-const FILE_POSITION_THUMB_LEFT_PX = 1;
-const FILE_POSITION_THUMB_MAX_WIDTH_PX = 19;
+const ARCHIVE_FOLDER_HIDDEN_CLASS = "pagemode-archive-folder-hidden";
 const DOCUMENT_CONTROL_SELECTOR = [
   "button",
   "input",
@@ -111,8 +110,8 @@ export default class PageModePlugin extends Plugin {
   private openingFileNavigationOffset: -1 | 1 | null = null;
   private pendingWheelNavigation: PendingWheelNavigation | null = null;
   private unloaded = false;
-  private archiveFolderStyleEl: HTMLStyleElement | null = null;
-  private filePositionStyleEl: HTMLStyleElement | null = null;
+  private archiveFolderObserver: MutationObserver | null = null;
+  private archiveFolderUpdateFrame: number | null = null;
   private filePositionBarEls = new WeakMap<MarkdownView, HTMLDivElement>();
   private activeFilePositionBarEl: HTMLElement | null = null;
   private filePositionUpdateFrame: number | null = null;
@@ -125,7 +124,6 @@ export default class PageModePlugin extends Plugin {
     this.unloaded = false;
     await this.loadSettings();
     this.addSettingTab(new PageModeSettingTab(this.app, this));
-    this.updateArchiveFolderStyles();
 
     this.addCommand({
       id: "open-next-file-in-folder",
@@ -205,10 +203,15 @@ export default class PageModePlugin extends Plugin {
         window.cancelAnimationFrame(this.filePositionUpdateFrame);
         this.filePositionUpdateFrame = null;
       }
-      this.archiveFolderStyleEl?.remove();
-      this.archiveFolderStyleEl = null;
-      this.filePositionStyleEl?.remove();
-      this.filePositionStyleEl = null;
+      if (this.archiveFolderUpdateFrame !== null) {
+        window.cancelAnimationFrame(this.archiveFolderUpdateFrame);
+        this.archiveFolderUpdateFrame = null;
+      }
+      this.archiveFolderObserver?.disconnect();
+      this.archiveFolderObserver = null;
+      activeDocument
+        .querySelectorAll(`.${ARCHIVE_FOLDER_HIDDEN_CLASS}`)
+        .forEach((element) => element.removeClass(ARCHIVE_FOLDER_HIDDEN_CLASS));
       activeDocument.querySelectorAll(`[data-pagemode-file-position-bar]`).forEach((element) => element.remove());
       activeDocument
         .querySelectorAll(`.${FILE_POSITION_CONTAINER_CLASS}`)
@@ -239,11 +242,15 @@ export default class PageModePlugin extends Plugin {
       }
 
       this.addFilePositionBars();
+      this.observeArchiveFolder();
+      this.updateArchiveFolderVisibility();
     });
 
     this.registerEvent(
       this.app.workspace.on("layout-change", () => {
         this.addFilePositionBars();
+        this.observeArchiveFolder();
+        this.updateArchiveFolderVisibility();
       }),
     );
 
@@ -298,7 +305,7 @@ export default class PageModePlugin extends Plugin {
   async saveSettings(): Promise<void> {
     this.settings.archiveFolder = this.normalizeArchiveFolder(this.settings.archiveFolder);
     await this.saveData(this.settings);
-    this.updateArchiveFolderStyles();
+    this.updateArchiveFolderVisibility();
   }
 
   private addArchiveMenuItem(menu: Menu, file: TAbstractFile): void {
@@ -333,24 +340,61 @@ export default class PageModePlugin extends Plugin {
     return normalizedPath;
   }
 
-  private updateArchiveFolderStyles(): void {
-    if (!this.archiveFolderStyleEl) {
-      this.archiveFolderStyleEl = activeDocument.head.createEl("style", {
-        attr: { "data-pagemode-archive-folder": "" },
-      });
-    }
+  private getFileExplorerContainers(): HTMLElement[] {
+    return this.app.workspace
+      .getLeavesOfType("file-explorer")
+      .map((leaf) => leaf.view.containerEl)
+      .filter((el): el is HTMLElement => el instanceof HTMLElement);
+  }
 
-    if (this.settings.showArchiveFolder) {
-      this.archiveFolderStyleEl.textContent = "";
+  private observeArchiveFolder(): void {
+    if (this.unloaded) {
       return;
     }
 
-    const archiveFolderPath = this.getArchiveFolderPath();
-    const dataPath = this.getCssString(archiveFolderPath);
-    this.archiveFolderStyleEl.textContent = `.workspace-leaf-content[data-type="file-explorer"] .nav-folder:has(> .nav-folder-title[data-path=${dataPath}]) {
-  display: none !important;
-}
-`;
+    const containers = this.getFileExplorerContainers();
+    this.archiveFolderObserver?.disconnect();
+    this.archiveFolderObserver = null;
+    if (containers.length === 0) {
+      return;
+    }
+
+    const observer = new MutationObserver(() => {
+      this.scheduleArchiveFolderVisibilityUpdate();
+    });
+    for (const container of containers) {
+      observer.observe(container, { childList: true, subtree: true });
+    }
+    this.archiveFolderObserver = observer;
+  }
+
+  private scheduleArchiveFolderVisibilityUpdate(): void {
+    if (this.unloaded || this.archiveFolderUpdateFrame !== null) {
+      return;
+    }
+
+    this.archiveFolderUpdateFrame = window.requestAnimationFrame(() => {
+      this.archiveFolderUpdateFrame = null;
+      this.updateArchiveFolderVisibility();
+    });
+  }
+
+  private updateArchiveFolderVisibility(): void {
+    if (this.unloaded) {
+      return;
+    }
+
+    const archiveFolderPath = this.settings.showArchiveFolder ? null : this.getArchiveFolderPath();
+    for (const container of this.getFileExplorerContainers()) {
+      container.querySelectorAll<HTMLElement>(".nav-folder-title[data-path]").forEach((titleEl) => {
+        const folderEl = titleEl.parentElement;
+        if (!folderEl || !folderEl.hasClass("nav-folder")) {
+          return;
+        }
+
+        folderEl.toggleClass(ARCHIVE_FOLDER_HIDDEN_CLASS, titleEl.dataset.path === archiveFolderPath);
+      });
+    }
   }
 
   private getCssString(value: string): string {
@@ -401,8 +445,6 @@ export default class PageModePlugin extends Plugin {
   }
 
   private addFilePositionBarToMarkdownView(view: MarkdownView, navigationFiles: TFile[]): void {
-    this.ensureFilePositionStyles();
-
     let barEl = this.filePositionBarEls.get(view);
     let thumbEl = barEl?.querySelector<HTMLElement>(`.${FILE_POSITION_THUMB_CLASS}`) ?? null;
     if (!barEl || !thumbEl || !view.contentEl.contains(barEl)) {
@@ -561,52 +603,6 @@ export default class PageModePlugin extends Plugin {
   private getMarkdownFileNavigationPosition(file: TFile, navigationFiles: TFile[]): FileNavigationPosition | null {
     const index = navigationFiles.findIndex((candidate) => candidate.path === file.path);
     return index >= 0 ? { index, total: navigationFiles.length } : null;
-  }
-
-  private ensureFilePositionStyles(): void {
-    if (!this.filePositionStyleEl) {
-      this.filePositionStyleEl = activeDocument.head.createEl("style", {
-        attr: { "data-pagemode-file-position-styles": "" },
-      });
-    }
-
-    this.filePositionStyleEl.textContent = `
-.${FILE_POSITION_CONTAINER_CLASS} {
-  position: relative;
-}
-
-.${FILE_POSITION_BAR_CLASS} {
-  background: transparent;
-  box-sizing: border-box;
-  cursor: default;
-  left: 0;
-  pointer-events: none;
-  position: absolute;
-  top: 0;
-  width: ${FILE_POSITION_BAR_MAX_WIDTH_PX}px;
-  z-index: 5;
-}
-
-.${FILE_POSITION_BAR_CLASS}::before {
-  display: none;
-}
-
-.${FILE_POSITION_THUMB_CLASS} {
-  background: var(--interactive-accent);
-  height: ${FILE_POSITION_THUMB_MIN_HEIGHT_PX}px;
-  left: ${FILE_POSITION_THUMB_LEFT_PX}px;
-  position: absolute;
-  width: min(${FILE_POSITION_THUMB_MAX_WIDTH_PX}px, calc(100% - ${FILE_POSITION_THUMB_LEFT_PX}px));
-}
-
-.${FILE_POSITION_BAR_CLASS}:not(.${FILE_POSITION_BAR_ACTIVE_CLASS}) .${FILE_POSITION_THUMB_CLASS} {
-  opacity: 0;
-}
-
-.${FILE_POSITION_BAR_CLASS}.is-hidden {
-  display: none;
-}
-`;
   }
 
   private async handleWheel(event: WheelEvent): Promise<void> {

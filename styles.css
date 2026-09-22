@@ -1,0 +1,43 @@
+/* PageMode */
+
+/* Archive folder hidden in File explorer (class is toggled from the plugin). */
+.workspace-leaf-content[data-type="file-explorer"] .nav-folder.pagemode-archive-folder-hidden {
+  display: none !important;
+}
+
+/* File position bar */
+.pagemode-has-file-position-bar {
+  position: relative;
+}
+
+.pagemode-file-position-bar {
+  background: transparent;
+  box-sizing: border-box;
+  cursor: default;
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  width: 64px;
+  z-index: 5;
+}
+
+.pagemode-file-position-bar::before {
+  display: none;
+}
+
+.pagemode-file-position-thumb {
+  background: var(--interactive-accent);
+  height: 2px;
+  left: 1px;
+  position: absolute;
+  width: min(19px, calc(100% - 1px));
+}
+
+.pagemode-file-position-bar:not(.is-active) .pagemode-file-position-thumb {
+  opacity: 0;
+}
+
+.pagemode-file-position-bar.is-hidden {
+  display: none;
+}

@@ -37,7 +37,7 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" main.js manifest.json --title "$GITHUB_REF_NAME" --notes "Release $GITHUB_REF_NAME" --verify-tag
+        run: gh release create "$GITHUB_REF_NAME" main.js manifest.json styles.css --title "$GITHUB_REF_NAME" --notes "Release $GITHUB_REF_NAME" --verify-tag
 
       - name: Attest release assets
         uses: actions/attest@v4
@@ -45,3 +45,4 @@ jobs:
           subject-path: |
             ${{ github.workspace }}/main.js
             ${{ github.workspace }}/manifest.json
+            ${{ github.workspace }}/styles.css

@@ -9,3 +9,7 @@ The `display()` override remains as a fallback for older versions, preserving th
 The new settings types are imported only for type checking; no new runtime API is required by the fallback.
 
 See the official [dual-support migration guide](https://docs.obsidian.md/plugins/guides/migrate-declarative-settings).
+
+## Styles
+
+All plugin CSS lives in `styles.css`, which Obsidian loads automatically. The plugin never creates `<style>` elements; it only toggles classes. The archive folder is hidden by adding `pagemode-archive-folder-hidden` to the matching `.nav-folder` in File explorer, re-applied through a `MutationObserver` on the explorer container.
