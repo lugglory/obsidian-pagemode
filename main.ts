@@ -1482,7 +1482,7 @@ class PageModeSettingTab extends PluginSettingTab {
     return [
       {
         name: "Page-unit scrolling",
-        desc: "Use wheel and trackpad gestures for page-sized content scrolling and edge-to-edge file movement.",
+        desc: "Scroll one screen at a time with the wheel or trackpad. At the top or bottom of a note, the next gesture opens the previous or next note.",
         render: (setting: Setting) => {
           setting.addToggle((toggle) => {
             toggle.setValue(this.plugin.settings.pageUnitScroll).onChange(async (value) => {
@@ -1494,7 +1494,7 @@ class PageModeSettingTab extends PluginSettingTab {
       },
       {
         name: "Archive folder",
-        desc: "Files are moved under this folder while keeping their current relative path.",
+        desc: "Archived files and folders are moved under this folder, keeping their relative path.",
         render: (setting: Setting) => {
           setting.addText((text) => {
             text
@@ -1509,7 +1509,7 @@ class PageModeSettingTab extends PluginSettingTab {
       },
       {
         name: "Show archive folder",
-        desc: "Show the archive folder in File explorer. Archived files are still excluded from PageMode navigation.",
+        desc: "Show the archive folder in File explorer. Archived notes are excluded from wheel navigation either way.",
         render: (setting: Setting) => {
           setting.addToggle((toggle) => {
             toggle.setValue(this.plugin.settings.showArchiveFolder).onChange(async (value) => {
