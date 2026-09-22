@@ -3,7 +3,7 @@
   "name": "PageMode",
   "version": "0.1.30",
   "minAppVersion": "1.6.6",
-  "description": "Page-style reading, wheel navigation, and note filing.",
+  "description": "Page-by-page scrolling, wheel navigation between notes, and quick archiving and filing.",
   "author": "Hyunyoung Park",
   "authorUrl": "",
   "isDesktopOnly": false
