@@ -1,6 +1,6 @@
 {
   "name": "pagemode",
-  "version": "0.1.30",
+  "version": "0.1.31",
   "description": "Page-style scrolling and wheel navigation between Markdown notes, with path-preserving archiving",
   "main": "main.js",
   "scripts": {
